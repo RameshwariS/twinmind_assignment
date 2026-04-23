@@ -107,7 +107,7 @@ Output format (strict JSON, no other text):
 }`;
 
     const completion = await groq.chat.completions.create({
-      model: "meta-llama/llama-4-maverick-17b-128e-instruct",
+      model: "llama-3.1-8b-instant",
       messages: [
         { role: "system", content: systemPrompt },
         {
@@ -162,7 +162,7 @@ When given a suggestion card and transcript context, provide:
 - Length: 150–400 words depending on complexity`;
 
     const completion = await groq.chat.completions.create({
-      model: "meta-llama/llama-4-maverick-17b-128e-instruct",
+      model: "llama-3.1-8b-instant",
       messages: [
         { role: "system", content: systemPrompt },
         {
@@ -216,7 +216,7 @@ Guidelines:
     };
 
     const completion = await groq.chat.completions.create({
-      model: "meta-llama/llama-4-maverick-17b-128e-instruct",
+      model: "llama-3.1-8b-instant",
       messages: [systemMessage, ...messages],
       temperature: 0.6,
       max_tokens: 1200,
