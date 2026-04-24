@@ -8,7 +8,7 @@ import fetch from "node-fetch";
 const app = express();
 const upload = multer({ storage: multer.memoryStorage() });
 
-app.use(cors());
+app.use(cors({ origin: "*" }));
 app.use(express.json({ limit: "10mb" }));
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────

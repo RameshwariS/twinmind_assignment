@@ -3,53 +3,151 @@ import { useSettings } from "../context/SettingsContext";
 
 const CHUNK_INTERVAL_MS = 30_000;
 
-// Pick the best supported mimeType once at module load
 const MIME_TYPE = ["audio/webm;codecs=opus", "audio/webm", "audio/ogg;codecs=opus", "audio/ogg"]
   .find((m) => MediaRecorder.isTypeSupported(m)) || "";
 
 const FILE_EXT = MIME_TYPE.startsWith("audio/ogg") ? "ogg" : "webm";
+const VALID_AUDIO_SOURCES = new Set(["mic", "system", "both"]);
+
+/**
+ * Acquire a mixed audio stream.
+ *
+ * "mic"    → getUserMedia only (your voice)
+ * "system" → getDisplayMedia tab audio only (what's playing in the tab)
+ * "both"   → mic + tab audio merged via AudioContext
+ *
+ * IMPORTANT for "system" / "both":
+ *   When the browser share picker appears, you MUST tick "Share tab audio"
+ *   (Chrome) or "Share audio" (Edge). Without it, no system audio is captured.
+ *
+ * Every returned stream has a ._stop() method that cleanly tears down
+ * all tracks and AudioContext nodes.
+ */
+async function getAudioStream(source) {
+  if (source === "mic") {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+    stream._stop = () => stream.getTracks().forEach((t) => t.stop());
+    return stream;
+  }
+
+  if (source === "system") {
+    const display = await navigator.mediaDevices.getDisplayMedia({
+      video: true,   // required by spec to trigger the picker UI
+      audio: {
+        echoCancellation: false,
+        noiseSuppression: false,
+        sampleRate: 44100,
+      },
+    });
+
+    // Drop video immediately — we only needed it to open the picker
+    display.getVideoTracks().forEach((t) => t.stop());
+
+    if (display.getAudioTracks().length === 0) {
+      display.getTracks().forEach((t) => t.stop());
+      throw new Error(
+        'No system audio captured. In the share dialog, tick "Share tab audio" (Chrome) or "Share audio" (Edge).'
+      );
+    }
+
+    display._stop = () => display.getTracks().forEach((t) => t.stop());
+    return display;
+  }
+
+  if (source === "both") {
+    let micStream = null;
+    let displayStream = null;
+
+    try {
+      [micStream, displayStream] = await Promise.all([
+        navigator.mediaDevices.getUserMedia({ audio: true, video: false }),
+        navigator.mediaDevices.getDisplayMedia({
+          video: true,
+          audio: {
+            echoCancellation: false,
+            noiseSuppression: false,
+            sampleRate: 44100,
+          },
+        }),
+      ]);
+    } catch (err) {
+      micStream?.getTracks().forEach((t) => t.stop());
+      displayStream?.getTracks().forEach((t) => t.stop());
+      throw err;
+    }
+
+    displayStream.getVideoTracks().forEach((t) => t.stop());
+
+    const hasSystemAudio = displayStream.getAudioTracks().length > 0;
+
+    if (!hasSystemAudio) {
+      // User did not tick "Share audio" — fall back to mic-only gracefully
+      console.warn("[useRecorder] No system audio captured — falling back to mic only.");
+      displayStream.getTracks().forEach((t) => t.stop());
+      micStream._stop = () => micStream.getTracks().forEach((t) => t.stop());
+      return micStream;
+    }
+
+    // Mix both into one stream
+    const ctx = new AudioContext();
+    const dest = ctx.createMediaStreamDestination();
+    ctx.createMediaStreamSource(micStream).connect(dest);
+    ctx.createMediaStreamSource(displayStream).connect(dest);
+
+    const mixed = dest.stream;
+    mixed._stop = () => {
+      micStream.getTracks().forEach((t) => t.stop());
+      displayStream.getTracks().forEach((t) => t.stop());
+      ctx.close();
+    };
+    return mixed;
+  }
+
+  throw new Error(`Unknown audio source: ${source}`);
+}
 
 export function useRecorder({ onTranscriptChunk }) {
   const { settings } = useSettings();
   const [isRecording, setIsRecording] = useState(false);
   const [isTranscribing, setIsTranscribing] = useState(false);
   const [error, setError] = useState(null);
+  const [audioSource, setAudioSource] = useState("both");
 
   const streamRef = useRef(null);
-  const intervalRef = useRef(null);
-  // Refs needed inside the interval callback without stale closure issues
   const groqApiKeyRef = useRef(settings.groqApiKey);
   const onChunkRef = useRef(onTranscriptChunk);
   const isRecordingRef = useRef(false);
+  const audioSourceRef = useRef("both");
   const setIsTranscribingRef = useRef(setIsTranscribing);
+  const setErrorRef = useRef(setError);
 
-  // Keep refs in sync
+  // Keep refs in sync with latest render values
   groqApiKeyRef.current = settings.groqApiKey;
   onChunkRef.current = onTranscriptChunk;
+  audioSourceRef.current = audioSource;
 
   /**
-   * Record exactly one window of audio (durationMs), then transcribe it.
-   * Each call creates a fresh MediaRecorder so the resulting Blob is a
-   * complete, self-contained WebM/OGG file that Groq can decode.
+   * Record one fixed-length window then transcribe.
+   * Fresh MediaRecorder per call = valid, self-contained audio file every time.
    */
   const recordAndTranscribe = useCallback(
     (stream, durationMs) =>
       new Promise((resolve) => {
         const chunks = [];
-        const mr = new MediaRecorder(stream, MIME_TYPE ? { mimeType: MIME_TYPE } : {});
+        let mr;
+        try {
+          mr = new MediaRecorder(stream, MIME_TYPE ? { mimeType: MIME_TYPE } : {});
+        } catch {
+          mr = new MediaRecorder(stream);
+        }
 
         mr.ondataavailable = (e) => {
           if (e.data.size > 0) chunks.push(e.data);
         };
 
         mr.onstop = async () => {
-          const blob = new Blob(chunks, { type: MIME_TYPE || "audio/webm" });
-
-          // Skip near-silent / nearly-empty recordings
-          if (blob.size < 2000) {
-            resolve();
-            return;
-          }
+          const blob = new Blob(chunks, { type: mr.mimeType || "audio/webm" });
+          if (blob.size < 2000) { resolve(); return; }
 
           setIsTranscribingRef.current(true);
           try {
@@ -62,87 +160,70 @@ export function useRecorder({ onTranscriptChunk }) {
             if (!res.ok) throw new Error(data.error || "Transcription failed");
             if (data.text?.trim()) onChunkRef.current(data.text.trim());
           } catch (err) {
-            // Surface error to UI via a separate state setter — we don't have
-            // access to setError directly here, so we re-throw and catch outside
             console.error("[transcribe]", err.message);
+            setErrorRef.current(err.message);
           } finally {
             setIsTranscribingRef.current(false);
             resolve();
           }
         };
 
+        mr.onerror = () => resolve();
         mr.start();
-        setTimeout(() => {
-          if (mr.state === "recording") mr.stop();
-        }, durationMs);
+        setTimeout(() => { if (mr.state === "recording") mr.stop(); }, durationMs);
       }),
     []
   );
 
-  const startRecording = useCallback(async () => {
+  const startRecording = useCallback(async (overrideSource) => {
     setError(null);
+    const source = VALID_AUDIO_SOURCES.has(overrideSource)
+      ? overrideSource
+      : audioSourceRef.current;
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const stream = await getAudioStream(source);
       streamRef.current = stream;
       isRecordingRef.current = true;
       setIsRecording(true);
 
-      // Immediately kick off the first recording window, then loop
-      const loop = async () => {
+      (async () => {
         while (isRecordingRef.current) {
           await recordAndTranscribe(stream, CHUNK_INTERVAL_MS);
         }
-      };
-      loop();
+      })();
     } catch (err) {
-      setError(err.message || "Microphone access denied");
+      setError(err.message || "Could not access audio");
     }
   }, [recordAndTranscribe]);
 
-  const stopRecording = useCallback(async () => {
+  const stopRecording = useCallback(() => {
     isRecordingRef.current = false;
     setIsRecording(false);
-    // Stop all mic tracks — this also causes any in-progress MediaRecorder
-    // to fire onstop naturally, so the last partial window still transcribes.
-    streamRef.current?.getTracks().forEach((t) => t.stop());
+    streamRef.current?._stop?.();
+    streamRef.current = null;
   }, []);
 
-  /**
-   * Manual refresh: stop the current recording window early (triggering
-   * an immediate transcription), then start a new window.
-   * We do this by stopping and restarting the stream's MediaRecorder cycle.
-   * Since our loop restarts automatically after each onstop, we just need
-   * to signal the current recorder to stop early.
-   *
-   * Implementation: we stop all tracks (ends current window → transcription
-   * fires), then re-acquire the mic and restart the loop.
-   */
   const flushNow = useCallback(async () => {
     if (!isRecordingRef.current) return;
+    const prev = streamRef.current;
 
-    // Temporarily pause the loop flag so the loop exits after current window
     isRecordingRef.current = false;
+    prev?._stop?.();
 
-    // Stop tracks → triggers onstop on current MediaRecorder → transcription
-    streamRef.current?.getTracks().forEach((t) => t.stop());
+    await new Promise((r) => setTimeout(r, 400));
 
-    // Wait briefly for transcription to start, then restart
-    await new Promise((r) => setTimeout(r, 300));
-
-    // Restart
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const stream = await getAudioStream(audioSourceRef.current);
       streamRef.current = stream;
       isRecordingRef.current = true;
 
-      const loop = async () => {
+      (async () => {
         while (isRecordingRef.current) {
           await recordAndTranscribe(stream, CHUNK_INTERVAL_MS);
         }
-      };
-      loop();
+      })();
     } catch (err) {
-      setError(err.message || "Microphone error on refresh");
+      setError(err.message || "Could not re-acquire audio");
       setIsRecording(false);
     }
   }, [recordAndTranscribe]);
@@ -151,6 +232,8 @@ export function useRecorder({ onTranscriptChunk }) {
     isRecording,
     isTranscribing,
     error,
+    audioSource,
+    setAudioSource,
     startRecording,
     stopRecording,
     flushNow,

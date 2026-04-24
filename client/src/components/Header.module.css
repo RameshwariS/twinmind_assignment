@@ -161,3 +161,47 @@
   border-color: var(--rose);
   color: white;
 }
+
+/* ─── Audio Source Selector ──────────────────────────────────────────────── */
+.sourceSelector {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 2px;
+}
+
+.sourceBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 10px;
+  border-radius: 6px;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  font-family: var(--font-body);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: var(--transition);
+  white-space: nowrap;
+}
+
+.sourceBtn:hover:not(:disabled) {
+  color: var(--text-secondary);
+  background: var(--bg-card-hover);
+}
+
+.sourceBtn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.sourceActive {
+  background: var(--accent-glow) !important;
+  color: var(--accent-hover) !important;
+  border: 1px solid var(--border-accent) !important;
+}

@@ -31,24 +31,27 @@ function AppInner() {
 
   const autoRefreshRef = useRef(null);
 
-  // Runs after each transcript chunk or manual refresh
   const doRefresh = useCallback(async () => {
     const t = getFullTranscript();
     if (t.trim()) await fetchSuggestions(t);
   }, [getFullTranscript, fetchSuggestions]);
 
-  // Wire recorder
   const handleTranscriptChunk = useCallback(
-    async (text) => {
-      addTranscriptChunk(text);
-    },
+    (text) => addTranscriptChunk(text),
     [addTranscriptChunk]
   );
 
-  const { isRecording, isTranscribing, error: recorderError, startRecording, stopRecording, flushNow } =
-    useRecorder({ onTranscriptChunk: handleTranscriptChunk });
+  const {
+    isRecording,
+    isTranscribing,
+    error: recorderError,
+    audioSource,
+    setAudioSource,
+    startRecording,
+    stopRecording,
+    flushNow,
+  } = useRecorder({ onTranscriptChunk: handleTranscriptChunk });
 
-  // Auto-refresh suggestions every N seconds while recording
   useEffect(() => {
     if (isRecording) {
       autoRefreshRef.current = setInterval(
@@ -61,7 +64,6 @@ function AppInner() {
     return () => clearInterval(autoRefreshRef.current);
   }, [isRecording, doRefresh, settings.refreshInterval]);
 
-  // Manual refresh: flush audio → get transcript chunk → fetch suggestions
   const handleManualRefresh = useCallback(async () => {
     if (isRecording) await flushNow();
     await doRefresh();
@@ -72,6 +74,8 @@ function AppInner() {
       <Header
         isRecording={isRecording}
         isTranscribing={isTranscribing}
+        audioSource={audioSource}
+        onSourceChange={setAudioSource}
         onStart={startRecording}
         onStop={stopRecording}
         onSettings={() => setSettingsOpen(true)}
@@ -104,9 +108,7 @@ function AppInner() {
         />
       </div>
 
-      {settingsOpen && (
-        <SettingsModal onClose={() => setSettingsOpen(false)} />
-      )}
+      {settingsOpen && <SettingsModal onClose={() => setSettingsOpen(false)} />}
     </div>
   );
 }

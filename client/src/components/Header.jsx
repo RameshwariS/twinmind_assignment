@@ -1,9 +1,17 @@
 import React from "react";
 import styles from "./Header.module.css";
 
+const SOURCE_OPTIONS = [
+  { value: "mic",    label: "Mic",   title: "Microphone only" },
+  { value: "system", label: "Tab",   title: "Browser tab audio (YouTube, Meet…)" },
+  { value: "both",   label: "Both",  title: "Mic + tab audio mixed together" },
+];
+
 export default function Header({
   isRecording,
   isTranscribing,
+  audioSource,
+  onSourceChange,
   onStart,
   onStop,
   onSettings,
@@ -28,27 +36,34 @@ export default function Header({
         {isRecording && !isTranscribing && (
           <span className={`${styles.pill} ${styles.recording}`}>
             <span className={styles.dot} />
-            live
+            live · {SOURCE_OPTIONS.find((o) => o.value === audioSource)?.label}
           </span>
         )}
       </div>
 
+      {/* Audio source selector — locked while recording */}
+      <div className={styles.sourceSelector} title={isRecording ? "Stop recording to change source" : ""}>
+        {SOURCE_OPTIONS.map((opt) => (
+          <button
+            key={opt.value}
+            className={`${styles.sourceBtn} ${audioSource === opt.value ? styles.sourceActive : ""}`}
+            onClick={() => onSourceChange(opt.value)}
+            disabled={isRecording}
+            title={opt.title}
+          >
+            {opt.value === "mic"    && <MicIcon size={12} />}
+            {opt.value === "system" && <MonitorIcon size={12} />}
+            {opt.value === "both"   && <MixIcon size={12} />}
+            {opt.label}
+          </button>
+        ))}
+      </div>
+
       <div className={styles.actions}>
-        <button
-          className={styles.iconBtn}
-          onClick={onExport}
-          title="Export session"
-          aria-label="Export session"
-        >
+        <button className={styles.iconBtn} onClick={onExport} title="Export session">
           <DownloadIcon />
         </button>
-
-        <button
-          className={styles.iconBtn}
-          onClick={onSettings}
-          title="Settings"
-          aria-label="Settings"
-        >
+        <button className={styles.iconBtn} onClick={onSettings} title="Settings">
           <GearIcon />
           {!hasKey && <span className={styles.badge} />}
         </button>
@@ -59,8 +74,8 @@ export default function Header({
             <span>Stop</span>
           </button>
         ) : (
-          <button className={styles.micBtn} onClick={onStart} disabled={!hasKey}>
-            <MicIcon />
+          <button className={styles.micBtn} onClick={() => onStart()} disabled={!hasKey}>
+            {audioSource === "mic" ? <MicIcon size={15} /> : audioSource === "system" ? <MonitorIcon size={15} /> : <MixIcon size={15} />}
             <span>Record</span>
           </button>
         )}
@@ -69,9 +84,9 @@ export default function Header({
   );
 }
 
-function MicIcon() {
+function MicIcon({ size = 16 }) {
   return (
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
       <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
       <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
       <line x1="12" y1="19" x2="12" y2="23"/>
@@ -80,9 +95,31 @@ function MicIcon() {
   );
 }
 
+function MonitorIcon({ size = 16 }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+      <rect x="2" y="3" width="20" height="14" rx="2"/>
+      <line x1="8" y1="21" x2="16" y2="21"/>
+      <line x1="12" y1="17" x2="12" y2="21"/>
+    </svg>
+  );
+}
+
+function MixIcon({ size = 16 }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+      <line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/>
+      <line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/>
+      <line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/>
+      <line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/>
+      <line x1="17" y1="16" x2="23" y2="16"/>
+    </svg>
+  );
+}
+
 function StopIcon() {
   return (
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
       <rect x="6" y="6" width="12" height="12" rx="2"/>
     </svg>
   );
